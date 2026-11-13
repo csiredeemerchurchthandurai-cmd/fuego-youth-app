@@ -116,15 +116,13 @@ export function LoginPage() {
           </form>
 
           <p className="mt-6 text-center text-sm text-gray-600">
-            Don't have an account?{' '}
+            {' '}
             <Link to="/signup" className="text-orange-600 font-semibold hover:text-orange-700 transition-colors">
-              Create one
             </Link>
           </p>
 
           <div className="mt-4 pt-4 border-t border-gray-100 text-center">
             <Link to="/portals" className="text-sm text-gray-500 hover:text-orange-600 transition-colors">
-              View all leader portals
             </Link>
           </div>
         </div>

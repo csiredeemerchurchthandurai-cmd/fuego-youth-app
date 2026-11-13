@@ -161,7 +161,7 @@ export function RoleLoginPage({ role, signupPath }: RoleLoginPageProps) {
             </Link>
           </p>
           <p className="mt-3 text-center text-sm text-gray-500">
-            <Link to="/portals" className="font-semibold text-orange-600 hover:text-orange-700">Choose a different portal</Link>
+            <Link to="/portals" className="font-semibold text-orange-600 hover:text-orange-700"></Link>
           </p>
         </div>
       </div>
