@@ -80,7 +80,12 @@ export function ProfilePage() {
     setSavingPassword(true);
     const { error: passwordError } = await supabase.auth.updateUser({ password: newPassword });
     if (passwordError) setError(passwordError.message);
-    else { setNewPassword(''); setConfirmPassword(''); flash('Your password has been changed.'); }
+    else {
+      // A changed password signs the person out on every device
+      localStorage.setItem('fuego:signedOutReason', 'password');
+      await supabase.auth.signOut({ scope: 'global' });
+      navigate('/login', { replace: true });
+    }
     setSavingPassword(false);
   };
 

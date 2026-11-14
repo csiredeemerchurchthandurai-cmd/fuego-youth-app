@@ -5,6 +5,8 @@ import { Alert } from '@/components/ui';
 import { PasswordInput } from '@/components/PasswordInput';
 import { supabase } from '@/lib/supabase';
 
+// Opened from the link in the reset email. Supabase signs the user in with a short recovery session,
+// which lets them choose a new password.
 export function ResetPasswordPage() {
   const navigate = useNavigate();
   const [status, setStatus] = useState<'checking' | 'ready' | 'invalid' | 'done'>('checking');
@@ -18,6 +20,7 @@ export function ResetPasswordPage() {
     const { data: listener } = supabase.auth.onAuthStateChange((event) => {
       if (event === 'PASSWORD_RECOVERY' && !cancelled) setStatus('ready');
     });
+    // The recovery session can already exist by the time this page loads, so also check for it (a few tries)
     const check = async () => {
       for (let attempt = 0; attempt < 6 && !cancelled; attempt += 1) {
         const { data } = await supabase.auth.getSession();
@@ -38,7 +41,7 @@ export function ResetPasswordPage() {
     setSaving(true);
     const { error: updateError } = await supabase.auth.updateUser({ password });
     if (updateError) { setError(updateError.message); setSaving(false); return; }
-    await supabase.auth.signOut();
+    await supabase.auth.signOut({ scope: 'global' });
     setStatus('done');
     setSaving(false);
   };

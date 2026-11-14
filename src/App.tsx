@@ -16,6 +16,7 @@ import { YouthMemberDashboard } from '@/pages/YouthMemberDashboard';
 import { LocalYouthSecretaryDashboard } from '@/pages/LocalYouthSecretaryDashboard';
 import { LeaderDashboard } from '@/pages/LeaderDashboard';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
+import { SessionGuard } from '@/components/SessionGuard';
 import type { UserRole } from '@/types';
 
 function RootRedirect() {
@@ -76,6 +77,7 @@ function DashboardRouter({ role }: { role: UserRole }) {
 export default function App() {
   return (
     <AuthProvider>
+      <SessionGuard />
       <BrowserRouter>
         <Routes>
           {/* Default login/signup */}

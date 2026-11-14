@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Building2, Users, Church as ChurchIcon, Plus, Calendar, Trash2, Edit3, X, Check, ChevronRight, Folder, FolderOpen, FileText, UserCircle, Send, UserPlus, UserCheck, Download, Mic, BookOpen, Star } from 'lucide-react';
+import { Building2, Users, Church as ChurchIcon, Plus, Calendar, Trash2, Edit3, X, Check, ChevronRight, Folder, FolderOpen, FileText, UserCircle, Send, UserPlus, UserCheck, Download, Mic, BookOpen, Star, Wrench } from 'lucide-react';
 import { DashboardShell } from '@/components/DashboardShell';
 import { Alert, StatCard } from '@/components/ui';
 import { CircularsSection } from '@/components/CircularsSection';
@@ -13,6 +13,7 @@ import { ExportAccessAdmin } from '@/components/ExportAccessAdmin';
 import { MessageWorshipAllChurches } from '@/components/MessageWorshipAllChurches';
 import { MinuteBook } from '@/components/MinuteBook';
 import { PublicLeadersAdmin } from '@/components/PublicLeadersAdmin';
+import { MaintenanceControl } from '@/components/MaintenanceControl';
 import { useUnreadCounts } from '@/hooks/useUnreadCounts';
 import { CountBadge } from '@/components/CountBadge';
 import { supabase } from '@/lib/supabase';
@@ -41,7 +42,7 @@ export function SuperAdminDashboard() {
   const emptyMemberForm = { full_name: '', email: '', phone: '', date_of_birth: '', address: '' };
   const [memberForm, setMemberForm] = useState(emptyMemberForm);
   const [savingMember, setSavingMember] = useState(false);
-  const [view, setView] = useState<'churches' | 'users' | 'circulars' | 'funds' | 'events' | 'requests' | 'manual' | 'downloads' | 'worshipAll' | 'minutes' | 'leadersPage'>('churches');
+  const [view, setView] = useState<'churches' | 'users' | 'circulars' | 'funds' | 'events' | 'requests' | 'manual' | 'downloads' | 'worshipAll' | 'minutes' | 'leadersPage' | 'maintenance'>('churches');
   const unread = useUnreadCounts(view === 'requests' ? 'requests' : view === 'circulars' ? 'circulars' : null);
 
   const fetchData = useCallback(async () => {
@@ -189,6 +190,7 @@ export function SuperAdminDashboard() {
             { key: 'worshipAll', label: 'Message & Worship', icon: <Mic size={16} /> },
             { key: 'minutes', label: 'Minute Books', icon: <BookOpen size={16} /> },
             { key: 'leadersPage', label: 'Leaders Page', icon: <Star size={16} /> },
+            { key: 'maintenance', label: 'Updates', icon: <Wrench size={16} /> },
           ] as const).map((t) => (
             <button
               key={t.key}
@@ -424,6 +426,7 @@ export function SuperAdminDashboard() {
       {view === 'worshipAll' && <MessageWorshipAllChurches />}
       {view === 'minutes' && <MinuteBook />}
       {view === 'leadersPage' && <PublicLeadersAdmin />}
+      {view === 'maintenance' && <MaintenanceControl />}
       {view === 'downloads' && <div className="space-y-6"><ExportAccessAdmin /><MemberExport mode="choose" churches={churches} /></div>}
 
       {/* Member detail drawer */}

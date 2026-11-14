@@ -39,7 +39,6 @@ export function markFeatureSeen(userId: string, feature: Feature, at: Date = new
  * Unread counts for the Requests and Circulars tabs.
  * Pass the feature whose tab is currently open: opening a tab clears its count.
  * New items that arrive while the tab is open still raise the badge until the list is refreshed.
- * Also sets the badge number on the installed app icon where the browser supports it.
  */
 export function useUnreadCounts(active: Feature | null) {
   const { profile } = useAuth();
@@ -73,13 +72,6 @@ export function useUnreadCounts(active: Feature | null) {
     };
     setCounts(next);
 
-    // Number on the home screen icon (installed app, supported browsers only)
-    const total = next.requests + next.circulars;
-    const nav = navigator as Navigator & { setAppBadge?: (n?: number) => Promise<void>; clearAppBadge?: () => Promise<void> };
-    try {
-      if (total > 0) await nav.setAppBadge?.(total);
-      else await nav.clearAppBadge?.();
-    } catch { /* not supported */ }
   }, [profile?.id, profile?.role, profile?.church_id]);
 
   // Opening a tab marks it as seen
