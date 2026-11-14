@@ -9,6 +9,7 @@ import { LeaderPortalsPage } from '@/pages/LeaderPortalsPage';
 import { ForgotPasswordPage } from '@/pages/ForgotPasswordPage';
 import { ResetPasswordPage } from '@/pages/ResetPasswordPage';
 import { ProfilePage } from '@/pages/ProfilePage';
+import NotificationSettings from '@/components/NotificationSettings';
 import { SuperAdminDashboard } from '@/pages/SuperAdminDashboard';
 import { ChurchAdminDashboard } from '@/pages/ChurchAdminDashboard';
 import { PcMemberDashboard } from '@/pages/PcMemberDashboard';
@@ -61,6 +62,9 @@ const LOCAL_ROLES: UserRole[] = ['local_youth_secretary', 'local_youth_treasurer
 
 // Every role except youth members (they have their own profile page inside their dashboard)
 const PROFILE_PAGE_ROLES: UserRole[] = ROLE_ROUTES.map((route) => route.role).filter((role) => role !== 'youth_member');
+
+// Every signed-in role can open the Notifications page
+const ALL_ROLES: UserRole[] = ROLE_ROUTES.map((route) => route.role);
 
 function DashboardRouter({ role }: { role: UserRole }) {
   if (role === 'super_admin') return <SuperAdminDashboard />;
@@ -116,6 +120,16 @@ export default function App() {
             element={
               <ProtectedRoute allowedRoles={PROFILE_PAGE_ROLES}>
                 <ProfilePage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Notification settings for every signed-in person */}
+          <Route
+            path="/notifications"
+            element={
+              <ProtectedRoute allowedRoles={ALL_ROLES}>
+                <NotificationSettings />
               </ProtectedRoute>
             }
           />

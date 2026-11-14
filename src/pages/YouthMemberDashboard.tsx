@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { CalendarDays, Camera, CheckCircle2, Clock3, FileText, KeyRound, LogOut, Menu, BookOpen, Mic, Paperclip, Pencil, ShieldCheck, UserRound, Users, X } from 'lucide-react';
+import { Bell, CalendarDays, Camera, CheckCircle2, Clock3, FileText, KeyRound, LogOut, Menu, BookOpen, Mic, Paperclip, Pencil, ShieldCheck, UserRound, Users, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import { NotificationToggle } from '@/components/NotificationToggle';
@@ -308,6 +308,7 @@ export function YouthMemberDashboard() {
         <div className="p-6 border-b border-white/10"><Logo size="sm" /><p className="mt-5 text-xs uppercase tracking-[0.18em] text-slate-400">Member portal</p><p className="mt-2 text-sm text-slate-300 truncate">{profile?.full_name}</p></div>
         <nav className="p-4 space-y-1">
           {navItems.map((item) => <button key={item.key} onClick={() => { setPage(item.key); setSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-colors ${page === item.key ? 'bg-orange-500 text-white' : 'text-slate-300 hover:bg-white/10 hover:text-white'}`}>{item.icon}<span>{item.label}</span>{item.badge ? <span className="ml-auto min-w-5 h-5 px-1 rounded-full bg-red-500 text-xs flex items-center justify-center">{item.badge}</span> : null}</button>)}
+          <button onClick={() => { setSidebarOpen(false); navigate('/notifications'); }} className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-colors text-slate-300 hover:bg-white/10 hover:text-white"><Bell size={18} /><span>Notification settings</span></button>
           <NotificationToggle />
         </nav>
         <button onClick={signOutAndLeave} className="absolute bottom-5 left-4 right-4 flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold text-slate-300 hover:bg-white/10 hover:text-white"><LogOut size={18} /> Sign out</button>

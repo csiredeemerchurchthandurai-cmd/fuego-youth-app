@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import { LogOut, Menu, X, LayoutDashboard, ChevronRight } from 'lucide-react';
+import { LogOut, Menu, X, LayoutDashboard, ChevronRight, Bell } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Logo } from '@/components/Logo';
 import { NotificationToggle } from '@/components/NotificationToggle';
@@ -28,7 +28,11 @@ export function DashboardShell({ children }: { children: ReactNode }) {
       <aside className={`fixed inset-y-0 left-0 z-50 w-80 max-w-[86vw] bg-slate-950 text-white shadow-2xl transition-transform duration-300 ${menuOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <div className="flex items-center justify-between p-5 border-b border-white/10"><Logo size="sm" /><button onClick={() => setMenuOpen(false)} className="rounded-xl p-2 text-slate-300 hover:bg-white/10 hover:text-white" aria-label="Close menu"><X size={20} /></button></div>
         <div className="p-5 border-b border-white/10"><p className="text-xs uppercase tracking-[0.18em] text-orange-300 font-bold">Signed in as</p><p className="mt-2 font-semibold truncate">{profile?.full_name || 'User'}</p><p className="mt-1 text-sm text-slate-400">{profile ? ROLE_LABELS[profile.role] : ''}</p></div>
-        <nav className="p-4 space-y-2"><button onClick={() => { setMenuOpen(false); navigate(dashboardPath); }} className="w-full flex items-center gap-3 rounded-xl px-4 py-3 text-left font-semibold text-slate-200 hover:bg-white/10 hover:text-white"><LayoutDashboard size={18} /> Dashboard <ChevronRight size={16} className="ml-auto text-slate-500" /></button><NotificationToggle /></nav>
+        <nav className="p-4 space-y-2">
+          <button onClick={() => { setMenuOpen(false); navigate(dashboardPath); }} className="w-full flex items-center gap-3 rounded-xl px-4 py-3 text-left font-semibold text-slate-200 hover:bg-white/10 hover:text-white"><LayoutDashboard size={18} /> Dashboard <ChevronRight size={16} className="ml-auto text-slate-500" /></button>
+          <button onClick={() => { setMenuOpen(false); navigate('/notifications'); }} className="w-full flex items-center gap-3 rounded-xl px-4 py-3 text-left font-semibold text-slate-200 hover:bg-white/10 hover:text-white"><Bell size={18} /> Notification settings <ChevronRight size={16} className="ml-auto text-slate-500" /></button>
+          <NotificationToggle />
+        </nav>
         <button onClick={leave} className="absolute bottom-5 left-4 right-4 flex items-center gap-3 rounded-xl px-4 py-3 text-left font-semibold text-slate-300 hover:bg-red-500/15 hover:text-red-200"><LogOut size={18} /> Sign out</button>
       </aside>
 
