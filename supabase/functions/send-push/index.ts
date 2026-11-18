@@ -1,6 +1,6 @@
-// Supabase Edge Function: sends web push notifications for new circulars, requests and comments,
-// and a reminder 5 minutes before each event starts (called every minute by pg_cron).
-// Trigger it with Database Webhooks (see setup notes).
+// Supabase Edge Function: sends web push notifications for new circulars, events, requests, comments,
+// minutes and download access, and a reminder 5 minutes before each event starts (called every minute by pg_cron).
+// Every call writes a line to the function's Logs saying who it tried to reach and how many pushes were delivered.
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import webpush from 'npm:web-push@3.6.7';
 
@@ -12,6 +12,16 @@ const GLOBAL_ROLES = ['super_admin', 'pastorate_youth_secretary', 'pastorate_you
 // Event times are stored without a time zone, so they are read in this zone (change with the EVENT_TIMEZONE secret)
 const TIMEZONE = Deno.env.get('EVENT_TIMEZONE') || 'Asia/Kolkata';
 const REMINDER_MINUTES = 5;
+
+// The app calls this function from the browser (the "Send test notification" button), so it must answer CORS
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-webhook-secret',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+};
+
+const json = (value: unknown, status = 200) =>
+  new Response(JSON.stringify(value), { status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
 function nowInTimezone() {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -31,31 +41,28 @@ function timeToSeconds(time: string) {
 }
 
 // Who an event is for: a church event goes to that church; a pastorate event goes to everyone,
-// or only to the chosen groups / youth members when the convener limited it
-type EventRow = { scope: string; church_id: string | null; audience_roles?: string[] | null; audience_member_ids?: string[] | null; audience_user_ids?: string[] | null };
-
-async function eventRecipients(event: EventRow): Promise<string[]> {
-  let recipientIds: string[] = [];
+// or only to the chosen groups / people when the convener limited it
+// deno-lint-ignore no-explicit-any
+async function eventAudience(event: any): Promise<string[]> {
   const limitedRoles: string[] = event.audience_roles ?? [];
   const limitedMembers: string[] = event.audience_member_ids ?? [];
   const limitedUsers: string[] = event.audience_user_ids ?? [];
   if (event.scope === 'pastorate' && (limitedRoles.length > 0 || limitedMembers.length > 0 || limitedUsers.length > 0)) {
-    recipientIds.push(...limitedUsers);
+    const ids: string[] = [...limitedUsers];
     if (limitedRoles.length > 0) {
-      const { data: byRole } = await supabase.from('profiles').select('id').in('role', limitedRoles);
-      recipientIds.push(...(byRole ?? []).map((row) => row.id));
+      const { data } = await supabase.from('profiles').select('id').in('role', limitedRoles);
+      ids.push(...(data ?? []).map((row) => row.id));
     }
     if (limitedMembers.length > 0) {
-      const { data: byMember } = await supabase.from('youth_member_profiles').select('id').in('youth_member_id', limitedMembers);
-      recipientIds.push(...(byMember ?? []).map((row) => row.id));
+      const { data } = await supabase.from('youth_member_profiles').select('id').in('youth_member_id', limitedMembers);
+      ids.push(...(data ?? []).map((row) => row.id));
     }
-  } else {
-    let query = supabase.from('profiles').select('id');
-    if (event.scope === 'local' && event.church_id) query = query.eq('church_id', event.church_id);
-    const { data: people } = await query;
-    recipientIds = (people ?? []).map((row) => row.id);
+    return ids;
   }
-  return recipientIds;
+  let query = supabase.from('profiles').select('id');
+  if (event.scope === 'local' && event.church_id) query = query.eq('church_id', event.church_id);
+  const { data } = await query;
+  return (data ?? []).map((row) => row.id);
 }
 
 async function sendEventReminders() {
@@ -86,14 +93,15 @@ async function sendEventReminders() {
       .select('id');
     if (!claimed || claimed.length === 0) continue;
 
-    const recipientIds = await eventRecipients(event);
+    const recipientIds = await eventAudience(event);
 
     const time = event.start_time.slice(0, 5);
-    await sendTo(recipientIds, {
+    const result = await sendTo(recipientIds, {
       title: `Starting soon: ${event.title}`,
       body: `Starts at ${time}${event.venue ? ` · ${event.venue}` : ''}`,
       tag: `event-reminder-${event.id}`,
-    }, null, 'events');
+    });
+    console.log('event reminder', event.title, JSON.stringify(result));
   }
 }
 
@@ -119,8 +127,10 @@ async function usersWithRole(role: string, churchId: string): Promise<string[]> 
 }
 
 // Who receives a request: the chosen role in the chosen churches (all churches, some churches, or the sender's own church)
-async function requestRecipients(request: { recipient_role: string; church_id: string; target_all_churches?: boolean | null; target_church_ids?: string[] | null }) {
-  if (GLOBAL_ROLES.includes(request.recipient_role)) return usersWithRole(request.recipient_role, request.church_id);
+async function requestRecipients(request: { recipient_role: string; church_id: string | null; target_all_churches?: boolean | null; target_church_ids?: string[] | null; target_user_ids?: string[] | null }) {
+  // Named people (chosen by the Super Admin): only they receive it
+  if (request.target_user_ids && request.target_user_ids.length > 0) return request.target_user_ids;
+  if (GLOBAL_ROLES.includes(request.recipient_role)) return usersWithRole(request.recipient_role, request.church_id ?? '');
   if (request.target_all_churches) {
     const { data } = await supabase.from('profiles').select('id').eq('role', request.recipient_role);
     return (data ?? []).map((row) => row.id);
@@ -129,76 +139,83 @@ async function requestRecipients(request: { recipient_role: string; church_id: s
     const { data } = await supabase.from('profiles').select('id').eq('role', request.recipient_role).in('church_id', request.target_church_ids);
     return (data ?? []).map((row) => row.id);
   }
-  return usersWithRole(request.recipient_role, request.church_id);
+  return usersWithRole(request.recipient_role, request.church_id ?? '');
 }
 
-// The settings switches on the Notifications page (one column per kind in notification_preferences)
-const CATEGORIES = ['circulars', 'events', 'minutes', 'requests', 'download_access'] as const;
-type Category = (typeof CATEGORIES)[number];
+type SendResult = { recipients: number; subscriptions: number; sent: number; failed: number; removed: number };
 
-// Sends to every saved device of the given people, except those who switched this kind off. Returns what happened.
-async function sendTo(userIds: string[], payload: Payload, excludeId?: string | null, category?: Category) {
-  let ids = [...new Set(userIds)].filter((id) => id && id !== excludeId);
-  const result = { people: 0, devices: 0, sent: 0, failed: 0, errors: [] as string[] };
+async function sendTo(userIds: string[], payload: Payload, excludeId?: string | null): Promise<SendResult> {
+  const ids = [...new Set(userIds)].filter((id) => id && id !== excludeId);
+  const result: SendResult = { recipients: ids.length, subscriptions: 0, sent: 0, failed: 0, removed: 0 };
   if (ids.length === 0) return result;
-
-  if (category && CATEGORIES.includes(category)) {
-    const { data: off } = await supabase.from('notification_preferences').select('user_id').in('user_id', ids).eq(category, false);
-    const blocked = new Set((off ?? []).map((row) => row.user_id));
-    ids = ids.filter((id) => !blocked.has(id));
-    if (ids.length === 0) return result;
-  }
-  result.people = ids.length;
-
   const { data: subs } = await supabase.from('push_subscriptions').select('id, endpoint, p256dh, auth').in('user_id', ids);
-  result.devices = (subs ?? []).length;
+  result.subscriptions = (subs ?? []).length;
   await Promise.all((subs ?? []).map(async (sub) => {
     try {
       await webpush.sendNotification({ endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } }, JSON.stringify({ url: '/', ...payload }));
-      result.sent++;
+      result.sent += 1;
     } catch (error) {
-      result.failed++;
       const status = (error as { statusCode?: number }).statusCode;
-      if (status === 404 || status === 410) {
-        await supabase.from('push_subscriptions').delete().eq('id', sub.id);
-      } else {
-        // Shows up in Supabase -> Edge Functions -> send-push -> Logs (for example 403 from Apple = wrong VAPID_SUBJECT or keys)
-        const detail = `${status ?? 'error'} ${(error as { body?: string }).body ?? (error as Error).message ?? ''}`.trim();
-        console.error('Push failed:', new URL(sub.endpoint).host, detail);
-        result.errors.push(detail);
-      }
+      if (status === 404 || status === 410) { await supabase.from('push_subscriptions').delete().eq('id', sub.id); result.removed += 1; }
+      else { result.failed += 1; console.error('push failed', status, (error as Error).message); }
     }
   }));
   return result;
 }
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
-
 Deno.serve(async (req) => {
+  // Browser pre-flight request
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
   const body = await req.json();
 
-  // "Send test notification" button: a signed-in person sends a test to their own devices
+  // A signed-in person testing their own devices: checked by their login, not by the webhook secret
   if (body.type === 'SELF_TEST') {
-    const token = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '');
-    const { data: auth } = await supabase.auth.getUser(token);
-    if (!auth.user) return new Response('Unauthorized', { status: 401, headers: corsHeaders });
-    const result = await sendTo([auth.user.id], { title: 'Fuego test notification', body: 'Notifications are working on this device.', tag: 'self-test' });
-    return new Response(JSON.stringify(result), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    const token = (req.headers.get('Authorization') ?? '').replace(/^Bearer\s+/i, '');
+    const { data: { user } } = await supabase.auth.getUser(token);
+    if (!user) return json({ error: 'Not signed in' }, 401);
+    const result = await sendTo([user.id], { title: 'Test notification', body: 'Notifications are working.', tag: 'test' });
+    console.log('self test', JSON.stringify(result));
+    return json({
+      ok: true,
+      devices: result.subscriptions,
+      sent: result.sent,
+      errors: result.failed > 0 ? [`${result.failed} device(s) rejected the push`] : [],
+    });
   }
 
-  const secret = Deno.env.get('WEBHOOK_SECRET');
-  if (secret && req.headers.get('x-webhook-secret') !== secret) return new Response('Unauthorized', { status: 401 });
+  // The secret lives in one place: the push_config table (the database triggers read the same row)
+  const { data: config } = await supabase.from('push_config').select('webhook_secret').eq('id', 1).maybeSingle();
+  const secret = config?.webhook_secret || Deno.env.get('WEBHOOK_SECRET');
+  if (secret && req.headers.get('x-webhook-secret') !== secret) {
+    console.warn('rejected: the x-webhook-secret did not match');
+    return new Response('Unauthorized', { status: 401, headers: corsHeaders });
+  }
 
   const { type, table, record, old_record } = body;
+  const results: Record<string, unknown>[] = [];
+  const note = (name: string, result: SendResult) => { results.push({ name, ...result }); console.log(name, JSON.stringify(result)); };
+
+  // Health check: how many devices are signed up for notifications?
+  if (type === 'PING') {
+    const { count } = await supabase.from('push_subscriptions').select('id', { count: 'exact', head: true });
+    return json({ ok: true, devices_subscribed: count ?? 0 });
+  }
+  // Send a test notification to one person: { "type": "TEST", "user_id": "..." }
+  if (type === 'TEST') {
+    const result = await sendTo([body.user_id], { title: 'Test notification', body: 'Notifications are working.', tag: 'test' });
+    return json({ ok: true, ...result });
+  }
 
   if (type === 'EVENT_REMINDERS') {
     await sendEventReminders();
-    return new Response('ok');
+    return json({ ok: true });
+  }
+
+  // A new event: tell the people it is for
+  if (table === 'youth_events' && type === 'INSERT') {
+    const when = `${new Date(`${record.event_date}T00:00:00`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}${record.start_time ? ` at ${String(record.start_time).slice(0, 5)}` : ''}`;
+    note('new event', await sendTo(await eventAudience(record), { title: `New event: ${record.title}`, body: `${when}${record.venue ? ` · ${record.venue}` : ''}`, tag: `event-${record.id}` }, record.created_by));
   }
 
   if (table === 'circulars' && type === 'INSERT') {
@@ -207,30 +224,22 @@ Deno.serve(async (req) => {
     if (record.church_id) query = query.or(`church_id.eq.${record.church_id},role.in.(${GLOBAL_ROLES.join(',')})`);
     const { data } = await query;
     const audience = (data ?? []).filter((row) => audienceIncludes(record.target_audience, row.role));
-    await sendTo(audience.map((row) => row.id), { title: 'New circular', body: record.title, tag: `circular-${record.id}` }, record.created_by, 'circulars');
-  }
-
-  // New event created: tell everyone it is meant for right away (the 5-minute reminder is sent separately)
-  if (table === 'youth_events' && type === 'INSERT') {
-    const recipients = await eventRecipients(record);
-    const when = [record.event_date, record.start_time ? String(record.start_time).slice(0, 5) : null].filter(Boolean).join(' ');
-    await sendTo(recipients, { title: `New event: ${record.title}`, body: `${when}${record.venue ? ` · ${record.venue}` : ''}`, tag: `event-${record.id}` }, record.created_by ?? null, 'events');
+    note('circular', await sendTo(audience.map((row) => row.id), { title: 'New circular', body: record.title, tag: `circular-${record.id}` }, record.created_by));
   }
 
   if (table === 'information_requests' && type === 'INSERT') {
-    const recipients = await requestRecipients(record);
-    await sendTo(recipients, { title: 'New request', body: `${record.requester_name || 'Someone'}: ${record.subject}`, tag: `request-${record.id}` }, record.requested_by, 'requests');
+    note('new request', await sendTo(await requestRecipients(record), { title: 'New request', body: `${record.requester_name || 'Someone'}: ${record.subject}`, tag: `request-${record.id}` }, record.requested_by));
   }
 
   if (table === 'information_requests' && type === 'UPDATE' && old_record?.status === 'pending' && record.status !== 'pending') {
-    await sendTo([record.requested_by], { title: `Request ${record.status}`, body: record.subject, tag: `request-${record.id}` }, record.decided_by, 'requests');
+    note('request decided', await sendTo([record.requested_by], { title: `Request ${record.status}`, body: record.subject, tag: `request-${record.id}` }, record.decided_by));
   }
 
   if (table === 'request_comments' && type === 'INSERT') {
-    const { data: request } = await supabase.from('information_requests').select('requested_by, recipient_role, church_id, subject, target_all_churches, target_church_ids').eq('id', record.request_id).maybeSingle();
+    const { data: request } = await supabase.from('information_requests').select('requested_by, recipient_role, church_id, subject, target_all_churches, target_church_ids, target_user_ids').eq('id', record.request_id).maybeSingle();
     if (request) {
       const recipients = [request.requested_by, ...(await requestRecipients(request))];
-      await sendTo(recipients, { title: `New comment: ${request.subject}`, body: `${record.author_name || 'Someone'}: ${String(record.body).slice(0, 100)}`, tag: `request-${record.request_id}` }, record.author_id, 'requests');
+      note('request comment', await sendTo(recipients, { title: `New comment: ${request.subject}`, body: `${record.author_name || 'Someone'}: ${String(record.body).slice(0, 100)}`, tag: `request-${record.request_id}` }, record.author_id));
     }
   }
 
@@ -242,7 +251,7 @@ Deno.serve(async (req) => {
       expired: { title: 'Download access expired', body: 'Your 5 hours are over. Request access again if you still need the full details.' },
     };
     const message = messages[record.status];
-    if (message) await sendTo([record.user_id], { ...message, tag: `export-access-${record.user_id}` }, null, 'download_access');
+    if (message) note('download access', await sendTo([record.user_id], { ...message, tag: `export-access-${record.user_id}` }));
   }
 
   // Minutes published: tell everyone in that church (youth members, church admin, local and pastorate admins, PC members)
@@ -250,9 +259,9 @@ Deno.serve(async (req) => {
     const justPublished = record.status === 'published' && (type === 'INSERT' || (type === 'UPDATE' && old_record?.status !== 'published'));
     if (justPublished) {
       const { data: people } = await supabase.from('profiles').select('id').eq('church_id', record.church_id);
-      await sendTo((people ?? []).map((row) => row.id), { title: 'New minutes published', body: `${record.title} (${record.meeting_date})`, tag: `minutes-${record.id}` }, record.created_by, 'minutes');
+      note('minutes', await sendTo((people ?? []).map((row) => row.id), { title: 'New minutes published', body: `${record.title} (${record.meeting_date})`, tag: `minutes-${record.id}` }, record.created_by));
     }
   }
 
-  return new Response('ok');
+  return json({ ok: true, results });
 });

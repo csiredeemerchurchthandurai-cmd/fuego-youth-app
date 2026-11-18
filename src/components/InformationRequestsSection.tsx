@@ -12,7 +12,7 @@ type StatusFilter = 'all' | RequestStatus;
 
 type InformationRequest = {
   id: string;
-  church_id: string;
+  church_id: string | null;
   requested_by: string;
   requester_role: UserRole;
   requester_name: string | null;
@@ -23,6 +23,7 @@ type InformationRequest = {
   decided_by_name: string | null;
   target_all_churches: boolean | null;
   target_church_ids: string[] | null;
+  target_user_ids: string[] | null;
   decided_at: string | null;
   created_at: string;
 };
@@ -48,6 +49,9 @@ type Attachment = {
   created_at: string;
 };
 
+type Person = { id: string; full_name: string | null; role: UserRole; church_id: string | null };
+type Scope = 'mine' | 'selected' | 'all' | 'people';
+
 // Roles that can be asked for information
 const recipientRoles: UserRole[] = [
   'super_admin',
@@ -60,7 +64,12 @@ const recipientRoles: UserRole[] = [
   'pastorate_youth_treasurer',
 ];
 
-const requestFields = 'id, church_id, requested_by, requester_role, requester_name, recipient_role, subject, message, status, decided_by_name, decided_at, created_at, target_all_churches, target_church_ids';
+// Who can address one church, several churches, or all churches
+const CHURCH_TARGET_ROLES = ['super_admin', 'pastorate_youth_secretary', 'pastorate_youth_treasurer', 'pastorate_convenor', 'local_youth_secretary', 'local_youth_treasurer'];
+// Who can also pick specific people (youth leaders). Add more roles here if needed.
+const PEOPLE_TARGET_ROLES = ['super_admin'];
+
+const requestFields = 'id, church_id, requested_by, requester_role, requester_name, recipient_role, subject, message, status, decided_by_name, decided_at, created_at, target_all_churches, target_church_ids, target_user_ids';
 const commentFields = 'id, request_id, author_id, author_name, author_role, body, created_at';
 const attachmentFields = 'id, request_id, comment_id, file_name, file_path, file_type, file_size, created_at';
 
@@ -150,6 +159,17 @@ function AttachmentList({ items, onOpen }: { items: Attachment[]; onOpen: (item:
   );
 }
 
+function recipientSummary(item: InformationRequest) {
+  if (item.target_user_ids && item.target_user_ids.length > 0) {
+    return ` · ${item.target_user_ids.length} ${item.target_user_ids.length === 1 ? 'person' : 'people'}`;
+  }
+  if (item.target_all_churches) return ' · all churches';
+  if (item.target_church_ids && item.target_church_ids.length > 0) {
+    return ` · ${item.target_church_ids.length} ${item.target_church_ids.length === 1 ? 'church' : 'churches'}`;
+  }
+  return '';
+}
+
 function RequestCard({ item, comments, requestFiles, commentFiles, canDecide, showRequester, churchName, onDecide, onComment, onOpenFile, onProblem }: {
   item: InformationRequest;
   comments: RequestComment[];
@@ -192,7 +212,7 @@ function RequestCard({ item, comments, requestFiles, commentFiles, canDecide, sh
           <p className="text-xs text-gray-400 mt-1">
             {showRequester
               ? `From ${item.requester_name || 'Unknown'} (${ROLE_LABELS[item.requester_role] || item.requester_role})${churchName ? ` · ${churchName}` : ''}`
-              : `To ${ROLE_LABELS[item.recipient_role] || item.recipient_role}${item.target_all_churches ? ' · all churches' : item.target_church_ids && item.target_church_ids.length > 0 ? ` · ${item.target_church_ids.length} ${item.target_church_ids.length === 1 ? 'church' : 'churches'}` : ''}`}
+              : `To ${item.target_user_ids && item.target_user_ids.length > 0 ? 'selected leaders' : ROLE_LABELS[item.recipient_role] || item.recipient_role}${recipientSummary(item)}`}
             {' · '}{new Date(item.created_at).toLocaleString()}
           </p>
         </div>
@@ -252,11 +272,16 @@ export function InformationRequestsSection({ mode = 'both' }: { mode?: 'send' | 
   const isInbox = activeBox === 'received';
   const showForm = mode === 'send' || (mode === 'both' && composeOpen);
   const [recipient, setRecipient] = useState<UserRole>('church_admin');
-  // Pastorate roles and the local secretary / treasurer can address one church, several churches, or all churches
-  const canTarget = ['pastorate_youth_secretary', 'pastorate_youth_treasurer', 'pastorate_convenor', 'local_youth_secretary', 'local_youth_treasurer'].includes(profile?.role || '');
-  const [scope, setScope] = useState<'mine' | 'selected' | 'all'>('mine');
+  // Who can choose the churches / specific people. The Super Admin can do all of it.
+  const canTarget = CHURCH_TARGET_ROLES.includes(profile?.role || '');
+  const canPickPeople = PEOPLE_TARGET_ROLES.includes(profile?.role || '');
+  const hasOwnChurch = Boolean(profile?.church_id);
+  const [scope, setScope] = useState<Scope>('mine');
   const [selectedChurches, setSelectedChurches] = useState<string[]>([]);
+  const [selectedPeople, setSelectedPeople] = useState<string[]>([]);
+  const [peopleSearch, setPeopleSearch] = useState('');
   const [churchList, setChurchList] = useState<{ id: string; name: string }[]>([]);
+  const [peopleList, setPeopleList] = useState<Person[]>([]);
   const [subject, setSubject] = useState('');
   const [message, setMessage] = useState('');
   const [newFiles, setNewFiles] = useState<File[]>([]);
@@ -271,6 +296,11 @@ export function InformationRequestsSection({ mode = 'both' }: { mode?: 'send' | 
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
+  // A person without a church of their own (the Super Admin) cannot use "My church"
+  useEffect(() => {
+    if (profile && !hasOwnChurch && scope === 'mine') setScope('all');
+  }, [profile, hasOwnChurch, scope]);
+
   const flash = (text: string) => {
     setSuccess(text);
     setTimeout(() => setSuccess(null), 3500);
@@ -282,9 +312,8 @@ export function InformationRequestsSection({ mode = 'both' }: { mode?: 'send' | 
     setLoading(true);
     let query = supabase.from('information_requests').select(requestFields).order('created_at', { ascending: false });
     if (isInbox) {
-      query = query.eq('recipient_role', profile.role);
-      // Church-level recipients only see their own church (the database enforces this too)
-      // Which church a request belongs to is checked below, because a request can address several churches
+      // Requests for my role, plus requests that name me personally
+      query = query.or(`recipient_role.eq.${profile.role},target_user_ids.cs.{${profile.id}}`);
     } else {
       query = query.eq('requested_by', profile.id);
     }
@@ -296,7 +325,10 @@ export function InformationRequestsSection({ mode = 'both' }: { mode?: 'send' | 
     }
     const wholePastorateRoles = ['super_admin', 'pastorate_convenor', 'pastorate_youth_secretary', 'pastorate_youth_treasurer'];
     const rows = ((data as InformationRequest[]) || []).filter((row) => {
-      if (!isInbox || wholePastorateRoles.includes(profile.role) || row.target_all_churches) return true;
+      if (!isInbox) return true;
+      // A request addressed to named people is only for those people
+      if (row.target_user_ids && row.target_user_ids.length > 0) return row.target_user_ids.includes(profile.id);
+      if (wholePastorateRoles.includes(profile.role) || row.target_all_churches) return true;
       if (row.target_church_ids && row.target_church_ids.length > 0) return Boolean(profile.church_id) && row.target_church_ids.includes(profile.church_id as string);
       return row.church_id === profile.church_id;
     });
@@ -344,6 +376,17 @@ export function InformationRequestsSection({ mode = 'both' }: { mode?: 'send' | 
     supabase.from('churches').select('id, name').order('name').then(({ data }) => setChurchList((data as { id: string; name: string }[]) || []));
   }, [canTarget]);
 
+  // The youth leaders a Super Admin can pick from (everyone who can receive requests, except super admins)
+  useEffect(() => {
+    if (!canPickPeople) return;
+    supabase
+      .from('profiles')
+      .select('id, full_name, role, church_id')
+      .in('role', recipientRoles.filter((role) => role !== 'super_admin'))
+      .order('full_name')
+      .then(({ data }) => setPeopleList(((data as Person[]) || []).filter((person) => person.id !== profile?.id)));
+  }, [canPickPeople, profile?.id]);
+
   // Uploads files to storage and records them. Returns how many failed.
   const uploadFiles = async (requestId: string, files: File[], commentId: string | null): Promise<number> => {
     if (!profile?.id) return files.length;
@@ -377,23 +420,37 @@ export function InformationRequestsSection({ mode = 'both' }: { mode?: 'send' | 
 
   const sendRequest = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!profile?.id || !profile.church_id || !subject.trim() || !message.trim() || sending) return;
-    setSending(true);
+    if (!profile?.id || !subject.trim() || !message.trim() || sending) return;
     setError(null);
-    if (canTarget && scope === 'selected' && selectedChurches.length === 0) { setError('Choose at least one church, or pick all churches.'); setSending(false); return; }
+
+    const usingPeople = canPickPeople && scope === 'people';
+    const usingChurches = canTarget && !usingPeople;
+    if (!hasOwnChurch && !usingPeople && usingChurches && scope === 'mine') { setError('Choose specific churches or all churches.'); return; }
+    if (usingChurches && scope === 'selected' && selectedChurches.length === 0) { setError('Choose at least one church, or pick all churches.'); return; }
+    if (usingPeople && selectedPeople.length === 0) { setError('Choose at least one person.'); return; }
+    // People who are not the Super Admin always need a church of their own
+    if (!hasOwnChurch && profile.role !== 'super_admin') { setError('Your account is not linked to a church yet.'); return; }
+
+    // For named people the role column still needs a value: use the first chosen person's role
+    const recipientRole = usingPeople
+      ? (peopleList.find((person) => person.id === selectedPeople[0])?.role ?? recipient)
+      : recipient;
+
+    setSending(true);
     const { data: created, error: insertError } = await supabase.from('information_requests').insert({
-      church_id: profile.church_id,
+      church_id: profile.church_id ?? null,
       requested_by: profile.id,
       requester_role: profile.role,
       requester_name: profile.full_name,
-      recipient_role: recipient,
-      target_all_churches: canTarget && scope === 'all',
-      target_church_ids: canTarget && scope === 'selected' ? selectedChurches : null,
+      recipient_role: recipientRole,
+      target_all_churches: usingChurches && scope === 'all',
+      target_church_ids: usingChurches && scope === 'selected' ? selectedChurches : null,
+      target_user_ids: usingPeople ? selectedPeople : null,
       subject: subject.trim(),
       message: message.trim(),
     }).select('id').single();
     if (insertError || !created) {
-      setError('Could not send your request. Please try again.');
+      setError(`Could not send your request. ${insertError?.message ?? 'Please try again.'}`);
       setSending(false);
       return;
     }
@@ -402,8 +459,10 @@ export function InformationRequestsSection({ mode = 'both' }: { mode?: 'send' | 
     setSubject('');
     setMessage('');
     setNewFiles([]);
-    setScope('mine');
+    setScope(hasOwnChurch ? 'mine' : 'all');
     setSelectedChurches([]);
+    setSelectedPeople([]);
+    setPeopleSearch('');
     if (mode === 'both') { setComposeOpen(false); setBox('sent'); }
     if (failed > 0) setError(`Your request was sent, but ${failed} file${failed > 1 ? 's' : ''} could not be uploaded.`);
     else flash('Your request has been sent.');
@@ -449,6 +508,20 @@ export function InformationRequestsSection({ mode = 'both' }: { mode?: 'send' | 
   };
   const visible = requests.filter((r) => filter === 'all' || r.status === filter);
 
+  const scopeOptions: [Scope, string][] = [
+    ...(hasOwnChurch ? ([['mine', 'My church']] as [Scope, string][]) : []),
+    ['selected', 'Specific churches'],
+    ['all', 'All churches'],
+    ...(canPickPeople ? ([['people', 'Specific youth leaders']] as [Scope, string][]) : []),
+  ];
+  const usingPeopleScope = canPickPeople && scope === 'people';
+  const visiblePeople = peopleList.filter((person) => {
+    const term = peopleSearch.trim().toLowerCase();
+    if (!term) return true;
+    const churchName = (churchList.find((church) => church.id === person.church_id)?.name || '').toLowerCase();
+    return (person.full_name || '').toLowerCase().includes(term) || (ROLE_LABELS[person.role] || person.role).toLowerCase().includes(term) || churchName.includes(term);
+  });
+
   return (
     <section className="space-y-6">
       {error && <Alert type="error" message={error} />}
@@ -474,32 +547,62 @@ export function InformationRequestsSection({ mode = 'both' }: { mode?: 'send' | 
             <p className="text-sm text-gray-500 mt-1">Ask for any information you need. You can follow its status and comments below.</p>
           </div>
           <div className="p-5 space-y-4">
-            <label className="block">
-              <span className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-gray-500">Send to</span>
-              <select value={recipient} onChange={(e) => setRecipient(e.target.value as UserRole)} className="w-full rounded-xl border border-gray-300 bg-white px-3 py-2.5 text-sm">
-                {recipientRoles.filter((role) => role !== profile?.role).map((role) => <option key={role} value={role}>{ROLE_LABELS[role]}</option>)}
-              </select>
-            </label>
             {canTarget && (
               <div>
-                <span className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-gray-500">Which churches?</span>
+                <span className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-gray-500">Who should receive it?</span>
                 <div className="flex flex-wrap gap-4 text-sm font-semibold text-gray-700">
-                  {([['mine', 'My church'], ['selected', 'Specific churches'], ['all', 'All churches']] as const).map(([value, label]) => (
+                  {scopeOptions.map(([value, label]) => (
                     <label key={value} className="flex items-center gap-2"><input type="radio" name="request-scope" checked={scope === value} onChange={() => setScope(value)} className="accent-orange-500" /> {label}</label>
                   ))}
                 </div>
-                {scope === 'selected' && (
-                  <div className="mt-3 grid max-h-48 gap-2 overflow-y-auto rounded-lg border border-gray-200 p-2 sm:grid-cols-2">
-                    {churchList.map((church) => (
-                      <label key={church.id} className="flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-gray-50">
-                        <input type="checkbox" checked={selectedChurches.includes(church.id)} onChange={() => setSelectedChurches((current) => (current.includes(church.id) ? current.filter((id) => id !== church.id) : [...current, church.id]))} className="h-4 w-4 accent-orange-500" /> {church.name}
-                      </label>
-                    ))}
-                  </div>
-                )}
+              </div>
+            )}
+
+            {!usingPeopleScope && (
+              <label className="block">
+                <span className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-gray-500">Send to</span>
+                <select value={recipient} onChange={(e) => setRecipient(e.target.value as UserRole)} className="w-full rounded-xl border border-gray-300 bg-white px-3 py-2.5 text-sm">
+                  {recipientRoles.filter((role) => role !== profile?.role).map((role) => <option key={role} value={role}>{ROLE_LABELS[role]}</option>)}
+                </select>
+              </label>
+            )}
+
+            {canTarget && scope === 'selected' && (
+              <div>
+                <div className="grid max-h-48 gap-2 overflow-y-auto rounded-lg border border-gray-200 p-2 sm:grid-cols-2">
+                  {churchList.map((church) => (
+                    <label key={church.id} className="flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-gray-50">
+                      <input type="checkbox" checked={selectedChurches.includes(church.id)} onChange={() => setSelectedChurches((current) => (current.includes(church.id) ? current.filter((id) => id !== church.id) : [...current, church.id]))} className="h-4 w-4 accent-orange-500" /> {church.name}
+                    </label>
+                  ))}
+                </div>
                 <p className="mt-1 text-xs text-gray-400">The role chosen above, in those churches, receives the request.</p>
               </div>
             )}
+
+            {canTarget && scope === 'all' && (
+              <p className="text-xs text-gray-400">The role chosen above, in every church, receives the request.</p>
+            )}
+
+            {usingPeopleScope && (
+              <div>
+                <span className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-gray-500">Choose youth leaders ({selectedPeople.length} selected)</span>
+                <input value={peopleSearch} onChange={(e) => setPeopleSearch(e.target.value)} placeholder="Search by name, role or church" className="mb-2 w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm" />
+                <div className="max-h-60 overflow-y-auto rounded-lg border border-gray-200 p-2">
+                  {visiblePeople.length === 0 ? (
+                    <p className="p-3 text-center text-sm text-gray-400">No leaders found.</p>
+                  ) : visiblePeople.map((person) => (
+                    <label key={person.id} className="flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-gray-50">
+                      <input type="checkbox" checked={selectedPeople.includes(person.id)} onChange={() => setSelectedPeople((current) => (current.includes(person.id) ? current.filter((id) => id !== person.id) : [...current, person.id]))} className="h-4 w-4 accent-orange-500" />
+                      <span className="min-w-0 flex-1 truncate font-semibold text-gray-900">{person.full_name || 'Unnamed'}</span>
+                      <span className="shrink-0 text-xs text-gray-400">{ROLE_LABELS[person.role] || person.role}{person.church_id ? ` · ${churchList.find((church) => church.id === person.church_id)?.name || ''}` : ''}</span>
+                    </label>
+                  ))}
+                </div>
+                <p className="mt-1 text-xs text-gray-400">Only the people you tick will receive this request.</p>
+              </div>
+            )}
+
             <label className="block">
               <span className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-gray-500">Subject</span>
               <input required value={subject} onChange={(e) => setSubject(e.target.value)} maxLength={120} placeholder="What do you need to know?" className="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm" />
@@ -555,7 +658,7 @@ export function InformationRequestsSection({ mode = 'both' }: { mode?: 'send' | 
                 commentFiles={commentFiles}
                 canDecide={isInbox}
                 showRequester={isInbox}
-                churchName={churchNames[item.church_id]}
+                churchName={item.church_id ? churchNames[item.church_id] : undefined}
                 onDecide={(status) => decide(item.id, status)}
                 onComment={(body, files) => addComment(item.id, body, files)}
                 onOpenFile={openFile}

@@ -90,12 +90,20 @@ export default function NotificationSettings() {
         subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY) });
       }
       const json = subscription.toJSON();
-      const row = { user_id: userId, endpoint: subscription.endpoint, p256dh: json.keys?.p256dh ?? '', auth: json.keys?.auth ?? '' };
-      const { data: existing } = await supabase.from('push_subscriptions').select('id').eq('endpoint', subscription.endpoint).limit(1);
-      const { error } = existing && existing.length > 0
-        ? await supabase.from('push_subscriptions').update(row).eq('id', existing[0].id)
-        : await supabase.from('push_subscriptions').insert(row);
-      if (error) throw error;
+
+      // Saved through a database function (security definer) so that a device row left behind by
+      // another account on this same browser is taken over instead of causing a duplicate key error.
+      const { error } = await supabase.rpc('save_push_subscription', {
+        p_endpoint: subscription.endpoint,
+        p_p256dh: json.keys?.p256dh ?? '',
+        p_auth: json.keys?.auth ?? '',
+      });
+      if (error) {
+        if (/save_push_subscription/i.test(error.message) && /could not find|does not exist|schema cache/i.test(error.message)) {
+          throw new Error('The database function save_push_subscription is missing. Run the SQL for it in the Supabase SQL editor.');
+        }
+        throw error;
+      }
       done('Notifications are on for this device.');
     } catch (error) {
       fail(`Could not turn notifications on: ${(error as Error).message}`);
@@ -112,7 +120,12 @@ export default function NotificationSettings() {
       const registration = await navigator.serviceWorker.getRegistration();
       const subscription = await registration?.pushManager.getSubscription();
       if (subscription) {
-        await supabase.from('push_subscriptions').delete().eq('endpoint', subscription.endpoint);
+        // Deleted through a database function so it works even if the row was created under another account
+        const { error } = await supabase.rpc('delete_push_subscription', { p_endpoint: subscription.endpoint });
+        if (error) {
+          // Fall back to a plain delete if the function has not been created yet
+          await supabase.from('push_subscriptions').delete().eq('endpoint', subscription.endpoint);
+        }
         await subscription.unsubscribe();
       }
       done('Notifications are off for this device.');
